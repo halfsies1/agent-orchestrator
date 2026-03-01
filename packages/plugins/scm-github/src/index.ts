@@ -171,7 +171,10 @@ function createGitHubSCM(): SCM {
     async mergePR(pr: PRInfo, method: MergeMethod = "squash"): Promise<void> {
       const flag = method === "rebase" ? "--rebase" : method === "merge" ? "--merge" : "--squash";
 
-      await gh(["pr", "merge", String(pr.number), "--repo", repoFlag(pr), flag, "--delete-branch"]);
+      // Default to keeping branches after merge. Auto-deleting branches can be
+      // surprising and can violate repo policies. If you want branch cleanup,
+      // do it explicitly outside of ao.
+      await gh(["pr", "merge", String(pr.number), "--repo", repoFlag(pr), flag]);
     },
 
     async closePR(pr: PRInfo): Promise<void> {

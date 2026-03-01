@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, lstatSync, symlinkSync, rmSync, mkdirSync, readdirSync } from "node:fs";
-import { join, resolve, basename, dirname } from "node:path";
+import { join, resolve, basename, dirname, sep } from "node:path";
 import { homedir } from "node:os";
 import type {
   PluginModule,
@@ -179,10 +179,24 @@ export function create(config?: Record<string, unknown>): Workspace {
           }
         }
 
-        if (path && (path === projectWorktreeDir || path.startsWith(projectWorktreeDir + "/"))) {
-          const sessionId = basename(path);
+        if (path) {
+          // Git may output paths using `/` even on Windows; normalize and compare
+          // using absolute, platform-correct separators.
+          const normalizedProjectDir = resolve(projectWorktreeDir);
+          const normalizedPath = resolve(path);
+
+          const projectCmp =
+            process.platform === "win32" ? normalizedProjectDir.toLowerCase() : normalizedProjectDir;
+          const pathCmp =
+            process.platform === "win32" ? normalizedPath.toLowerCase() : normalizedPath;
+
+          if (!(pathCmp === projectCmp || pathCmp.startsWith(projectCmp + sep))) {
+            continue;
+          }
+
+          const sessionId = basename(normalizedPath);
           infos.push({
-            path,
+            path: normalizedPath,
             branch: branch || "detached",
             sessionId,
             projectId,

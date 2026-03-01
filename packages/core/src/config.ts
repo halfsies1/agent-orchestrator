@@ -88,7 +88,12 @@ const DefaultPluginsSchema = z.object({
   notifiers: z.array(z.string()).default(["composio", "desktop"]),
 });
 
-const OrchestratorConfigSchema = z.object({
+// NOTE: We intentionally allow unknown top-level keys via `.passthrough()`.
+// This preserves backwards-compatible config fields (e.g. dataDir/worktreeDir)
+// and allows plugin-specific settings to live at the top-level until we add a
+// dedicated `plugins:` config block.
+const OrchestratorConfigSchema = z
+  .object({
   port: z.number().default(3000),
   terminalPort: z.number().optional(),
   directTerminalPort: z.number().optional(),
@@ -103,7 +108,8 @@ const OrchestratorConfigSchema = z.object({
     info: ["composio"],
   }),
   reactions: z.record(ReactionConfigSchema).default({}),
-});
+})
+  .passthrough();
 
 // =============================================================================
 // CONFIG LOADING
@@ -402,7 +408,10 @@ export function loadConfigWithPath(configPath?: string): {
 export function validateConfig(raw: unknown): OrchestratorConfig {
   const validated = OrchestratorConfigSchema.parse(raw);
 
-  let config = validated as OrchestratorConfig;
+  // NOTE: configPath is injected during load (see loadConfig/loadConfigWithPath),
+  // so the Zod schema intentionally does not require it. Cast via `unknown` to
+  // avoid TS2352 when the schema is in passthrough mode.
+  let config = validated as unknown as OrchestratorConfig;
   config = expandPaths(config);
   config = applyProjectDefaults(config);
   config = applyDefaultReactions(config);

@@ -51,11 +51,29 @@ const BUILTIN_PLUGINS: Array<{ slot: PluginSlot; name: string; pkg: string }> = 
 
 /** Extract plugin-specific config from orchestrator config */
 function extractPluginConfig(
-  _slot: PluginSlot,
-  _name: string,
-  _config: OrchestratorConfig,
+  slot: PluginSlot,
+  name: string,
+  config: OrchestratorConfig,
 ): Record<string, unknown> | undefined {
-  // Reserved for future plugin-specific config mapping
+  // NOTE: OrchestratorConfig is intentionally a "clean" typed interface.
+  // The YAML loader preserves unknown top-level keys via `.passthrough()`,
+  // so we treat the config object as an untyped record for plugin mapping.
+  const raw = config as unknown as Record<string, unknown>;
+
+  // Workspace: worktree
+  if (slot === "workspace" && name === "worktree") {
+    const worktreeDir = raw["worktreeDir"];
+    if (typeof worktreeDir === "string" && worktreeDir.trim()) {
+      return { worktreeDir };
+    }
+  }
+
+  // Terminal: web — ensure the dashboard URL matches the configured port.
+  if (slot === "terminal" && name === "web") {
+    const port = typeof config.port === "number" ? config.port : 3000;
+    return { dashboardUrl: `http://localhost:${port}` };
+  }
+
   return undefined;
 }
 

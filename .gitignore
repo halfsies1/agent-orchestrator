@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .pnpm-store/
+.corepack/
+.npm-cache/
+.tools/
 .next/
 *.tsbuildinfo
 coverage/
