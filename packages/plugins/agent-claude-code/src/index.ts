@@ -633,7 +633,19 @@ function createClaudeCodeAgent(): Agent {
     getLaunchCommand(config: AgentLaunchConfig): string {
       // Note: CLAUDECODE is unset via getEnvironment() (set to ""), not here.
       // This command must be safe for both shell and execFile contexts.
-      const parts: string[] = ["claude"];
+      const agentCfg = config.projectConfig.agentConfig ?? {};
+      const rawCliPath = agentCfg["cliPath"];
+      const cliPath =
+        typeof rawCliPath === "string" && rawCliPath.trim().length > 0
+          ? rawCliPath.trim()
+          : "claude";
+      const chrome = agentCfg["chrome"] === true;
+
+      const parts: string[] = [shellEscape(cliPath)];
+
+      if (chrome) {
+        parts.push("--chrome");
+      }
 
       if (config.permissions === "skip") {
         parts.push("--dangerously-skip-permissions");
@@ -792,7 +804,17 @@ function createClaudeCodeAgent(): Agent {
       if (!sessionUuid) return null;
 
       // Build resume command
-      const parts: string[] = ["claude", "--resume", shellEscape(sessionUuid)];
+      const agentCfg = project.agentConfig ?? {};
+      const rawCliPath = agentCfg["cliPath"];
+      const cliPath =
+        typeof rawCliPath === "string" && rawCliPath.trim().length > 0
+          ? rawCliPath.trim()
+          : "claude";
+      const chrome = agentCfg["chrome"] === true;
+
+      const parts: string[] = [shellEscape(cliPath)];
+      if (chrome) parts.push("--chrome");
+      parts.push("--resume", shellEscape(sessionUuid));
 
       if (project.agentConfig?.permissions === "skip") {
         parts.push("--dangerously-skip-permissions");

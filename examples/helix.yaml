@@ -1,0 +1,41 @@
+# Helix (Decision-Grade SDLC Pod) example config
+#
+# Intended usage:
+# - Put this content in `agent-orchestrator.yaml` (usually at your Helix repo root).
+# - Run `ao start`, then spawn a pod with:
+#     ao pod start helix "Feature Name" --surface fusion-v2 --ui
+#
+# Notes:
+# - `worktreeDir` is important on Windows so all pod worktrees land under `C:\helix\wt\...`.
+# - The pod command will use your default agent for most sessions, but can override a role
+#   (e.g. `ui_concept`) to use `claude-code`.
+# - Claude Code `--chrome` can be enabled via `agentConfig.chrome: true`.
+
+port: 3000
+
+# Helix convention: git worktrees live under C:\helix\wt\...
+worktreeDir: C:/helix/wt
+
+defaults:
+  # Windows-friendly default; switch to `tmux` if you run AO inside WSL/macOS.
+  runtime: process
+  agent: codex
+  workspace: worktree
+  notifiers: [desktop]
+
+projects:
+  helix:
+    repo: halfsies1/helix
+    path: C:/helix
+    defaultBranch: main
+    sessionPrefix: hx
+
+    # Used by claude-code agent sessions (e.g. ui concepts role in `ao pod start --ui`)
+    agentConfig:
+      permissions: skip
+      # model: <optional>
+
+      # Use your local Claude Code CLI with Chrome UI
+      cliPath: C:/Users/hansraj/.local/bin/claude.exe
+      chrome: true
+

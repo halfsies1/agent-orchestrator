@@ -8,7 +8,7 @@ import {
   type OrchestratorConfig,
   type ProjectConfig,
 } from "@composio/ao-core";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { exec } from "../lib/shell.js";
 import { getSessionManager } from "../lib/create-session-manager.js";
@@ -33,6 +33,17 @@ function makeRoleBranch(integrationBranch: string, roleSuffix: string): string {
   const base = integrationBranch.replace(/^feat\//, "");
   const suffix = slugify(roleSuffix);
   return `feat/${base}-${suffix}`;
+}
+
+function safeFsName(input: string): string {
+  return String(input ?? "")
+    .trim()
+    .replace(/[\\/]+/g, "__")
+    .replace(/[:*?"<>|]/g, "_")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
 }
 
 function extractPrUrl(output: string): string | null {
@@ -140,6 +151,106 @@ function psBinary(): string {
   return process.platform === "win32" ? "powershell" : "pwsh";
 }
 
+type HelixUiArea = "portfolio-planner" | "security-admin" | "integrations-admin" | "strategy-studio";
+
+function parseUiArea(raw?: string): HelixUiArea {
+  const v = String(raw ?? "").trim();
+  switch (v) {
+    case "portfolio-planner":
+    case "security-admin":
+    case "integrations-admin":
+    case "strategy-studio":
+      return v;
+    default:
+      return "strategy-studio";
+  }
+}
+
+function defaultUiConceptId(surfaceTag: string, featureName: string): string {
+  return `${slugify(surfaceTag)}-${slugify(featureName)}-v1`;
+}
+
+function podArtifactsDir(workspacePath: string, podId: string): string {
+  return join(workspacePath, ".codex", "pods", safeFsName(podId));
+}
+
+function writeIfMissing(filePath: string, content: string): void {
+  if (existsSync(filePath)) return;
+  writeFileSync(filePath, content, "utf-8");
+}
+
+function helixContractTemplate(args: {
+  podId: string;
+  featureName: string;
+  surfaceTag: string;
+  integrationBranch: string;
+  defaultBranch: string;
+  uiConceptId?: string | null;
+  uiArea?: HelixUiArea | null;
+}): string {
+  const uiLine =
+    args.uiConceptId && args.uiArea
+      ? `UI concept: /dev/ui-concepts/${args.uiConceptId} (area: ${args.uiArea})`
+      : "UI concept: TBD";
+
+  return [
+    `# Helix Feature Pod Contract`,
+    ``,
+    `Pod: ${args.podId}`,
+    `Feature: ${args.featureName}`,
+    `Surface: ${args.surfaceTag}`,
+    `Integration branch: ${args.integrationBranch}`,
+    `Target merge: ${args.integrationBranch} -> ${args.defaultBranch}`,
+    uiLine,
+    ``,
+    `## Decision package (exec-grade)`,
+    `Headline:`,
+    `Why this matters:`,
+    `Recommendation:`,
+    `Options & tradeoffs:`,
+    `Evidence / assumptions / data gaps:`,
+    `Activation (explicit approval step):`,
+    ``,
+    `## Acceptance criteria (testable)`,
+    `- [ ] Happy path works end-to-end`,
+    `- [ ] Top failure paths are handled with exec-safe errors + remediation CTAs`,
+    `- [ ] No silent side effects; activation is explicit and logged where applicable`,
+    ``,
+    `## Non-negotiable gates (no merge without these, unless founder waiver)`,
+    `- [ ] Founder UX approval (screenshots + parity evidence attached)`,
+    `- [ ] Playwright E2E: headless + headed for touched flows`,
+    `- [ ] Playwright visual snapshots updated + passing for screenshot-locked frames`,
+    `- [ ] Security: no known PII leaks; exports enforce authz (people:pii:read=false safe)`,
+    `- [ ] Readiness & Data Quality reconcile (no contradictory gates)`,
+    `- [ ] Deterministic numbers: reconcile OR show explicit Unknown + reason (no silent nulls)`,
+    `- [ ] No raw JSON/stack traces rendered to execs`,
+    `- [ ] Unit/integration tests added for new behavior`,
+    `- [ ] Rollback plan + basic observability notes`,
+    ``,
+    `## UAT scenarios (scripted)`,
+    `Known regression classes to explicitly cover (from recent Helix UAT):`,
+    `- Exports: no PII leaks; encoding is correct (no mojibake)`,
+    `- Readiness vs Data Quality: no contradictory gates/states`,
+    `- Combined-org flows: no circular preconditions / dead ends`,
+    `- Workforce grid: no 400/500 while UI claims READY`,
+    `- AI-backed surfaces: never show raw JSON errors; handle 4xx/5xx with exec-safe UX`,
+    `- Economics: no silent nulls; totals reconcile or show explicit Unknown`,
+    ``,
+    `- [ ] Scenario 1: ...`,
+    `- [ ] Scenario 2: ...`,
+    ``,
+    `## Evidence pack (links / files / commands)`,
+    `- Playwright report:`,
+    `- Screenshots/video:`,
+    `- Test commands executed + output:`,
+    `- Notes on determinism / reconciliation checks:`,
+    ``,
+    `## Founder waivers (if any)`,
+    `Record waivers explicitly: what gate is waived, why, risk, and owner.`,
+    ``,
+  ].join("\n");
+}
+
 async function bestEffortBootstrapHelixHandoff(
   workspacePath: string,
   owner: string,
@@ -188,20 +299,29 @@ function coordinatorPrompt(
   surfaceTag: string,
   integrationBranch: string,
   defaultBranch: string,
+  podId: string,
+  uiConceptId: string | null,
+  uiArea: HelixUiArea,
 ): string {
+  const contractRel = `.codex/pods/${safeFsName(podId)}/CONTRACT.md`;
+  const uiLine = uiConceptId ? `/dev/ui-concepts/${uiConceptId} (area: ${uiArea})` : "TBD";
   return [
     `You are the Helix Feature Pod Lead (senior MBB partner + CTO).`,
     ``,
     `Feature: "${featureName}"`,
     `Surface: ${surfaceTag}`,
     `Integration branch: ${integrationBranch}`,
+    `Pod: ${podId}`,
+    `Contract: ${contractRel}`,
+    `UI concept: ${uiLine}`,
     ``,
     `Mission: ship a decision-grade, enterprise-ready feature with zero silent side effects.`,
     ``,
     `Required artifacts (create in the repo, keep them concise):`,
-    `1. Decision package draft: Headline -> Why This Matters -> Recommendation -> Options/Tradeoffs -> Evidence/Assumptions/Data gaps -> Activation.`,
-    `2. Acceptance criteria: explicit and testable (happy path + top failure paths).`,
-    `3. Contract checklist:`,
+    `1. Update the contract (${contractRel}): decision package + acceptance criteria + gates.`,
+    `2. Ensure UI/UX gate is satisfied: founder sees evidence (screenshots/video) and approves explicitly.`,
+    `3. Ensure all gates are evidenced (tests + reproducible steps).`,
+    `4. Contract checklist (block on violations):`,
     `   - Clean-room / PII redaction (no leaks when people:pii:read=false).`,
     `   - Readiness and Data Quality must reconcile (no contradictory gates).`,
     `   - Preconditions must be actionable (no circular dependencies / dead ends).`,
@@ -215,13 +335,26 @@ function coordinatorPrompt(
 }
 
 function workerPrompt(
+  role: string,
   roleName: string,
   ownership: string,
   featureName: string,
   surfaceTag: string,
   integrationBranch: string,
   defaultBranch: string,
+  podId: string,
 ): string {
+  const contractRel = `.codex/pods/${safeFsName(podId)}/CONTRACT.md`;
+
+  const requiredSkills: string[] = [
+    "test-driven-development (before implementing any behavior)",
+    "systematic-debugging (when anything fails or is unclear)",
+    "verification-before-completion (before claiming something is done/passing)",
+  ];
+  if (role === "qa" || role === "verifier") requiredSkills.push("webapp-testing (Playwright evidence/snapshots)");
+  if (role === "security") requiredSkills.push("helix-security-issue-ticketing (when you find/clarify security defects)");
+  if (role === "ui_concept") requiredSkills.push("helix-ui-concepts / helix-ui-concepts-docs (golden UI concept + viewer)");
+
   return [
     `You are the Helix ${roleName}.`,
     `Ownership boundary: ${ownership}`,
@@ -229,6 +362,10 @@ function workerPrompt(
     `Feature: "${featureName}"`,
     `Surface: ${surfaceTag}`,
     `Integration branch: ${integrationBranch}`,
+    `Pod contract: ${contractRel}`,
+    ``,
+    `Required skills (non-negotiable):`,
+    ...requiredSkills.map((s) => `- ${s}`),
     ``,
     `Non-negotiables:`,
     `- No silent side effects. Any behavior change must be described in PR.`,
@@ -268,6 +405,12 @@ export function registerPod(program: Command): void {
     .argument("<project>", "Project ID from config")
     .argument("<feature>", "Feature name (quote it if it contains spaces)")
     .requiredOption("--surface <tag>", "Helix surface tag (used for naming and handoff conventions)")
+    .option("--ui", "Include a UI concept workstream (recommended for any UI changes)")
+    .option("--ui-concept <id>", "UI concept id (defaults to <surface>-<feature>-v1 when --ui is set)")
+    .option(
+      "--ui-area <area>",
+      "UI concept area (portfolio-planner | security-admin | integrations-admin | strategy-studio). Default: strategy-studio",
+    )
     .option("--no-pr", "Do not attempt to auto-create the integration PR")
     .action(
       async (
@@ -275,6 +418,9 @@ export function registerPod(program: Command): void {
         featureName: string,
         opts: {
           surface: string;
+          ui?: boolean;
+          uiConcept?: string;
+          uiArea?: string;
           pr?: boolean;
         },
       ) => {
@@ -290,6 +436,9 @@ export function registerPod(program: Command): void {
         const surfaceTag = opts.surface.trim();
         const integrationBranch = makeIntegrationBranch(surfaceTag, featureName);
         const podId = `${new Date().toISOString().slice(0, 10)}:${surfaceTag}:${slugify(featureName)}`;
+        const uiArea = parseUiArea(opts.uiArea);
+        const uiConceptId =
+          opts.ui === true ? (opts.uiConcept?.trim() ? opts.uiConcept.trim() : defaultUiConceptId(surfaceTag, featureName)) : null;
 
         const spinner = ora("Spawning feature pod").start();
         const sm = await getSessionManager(config);
@@ -328,6 +477,27 @@ export function registerPod(program: Command): void {
               `.codex/worktrees/${sanitizeForHandoffFileName(integrationBranch)}.md`,
             ]);
           }
+
+          // Create pod contract skeleton on the integration branch (best effort).
+          const podDir = podArtifactsDir(coordinator.workspacePath, podId);
+          mkdirSync(podDir, { recursive: true });
+
+          const contractPath = join(podDir, "CONTRACT.md");
+          writeIfMissing(
+            contractPath,
+            helixContractTemplate({
+              podId,
+              featureName,
+              surfaceTag,
+              integrationBranch,
+              defaultBranch: project.defaultBranch,
+              uiConceptId,
+              uiArea: opts.ui === true ? uiArea : null,
+            }),
+          );
+          await bestEffortCommit(coordinator.workspacePath, "chore: seed pod contract", [
+            `.codex/pods/${safeFsName(podId)}/CONTRACT.md`,
+          ]);
         }
 
         if (opts.pr !== false && coordinator.workspacePath) {
@@ -385,7 +555,26 @@ export function registerPod(program: Command): void {
           roleName: string;
           branchSuffix: string;
           ownership: string;
+          agent?: string;
         }> = [
+          {
+            role: "decision_guardian",
+            roleName: "Decision Guardian (MBB partner)",
+            branchSuffix: "decision",
+            ownership: "decision package, acceptance criteria, exec narrative, and governance language",
+          },
+          ...(opts.ui === true
+            ? [
+                {
+                  role: "ui_concept",
+                  roleName: "UI Concepts Lead",
+                  branchSuffix: "concept",
+                  ownership:
+                    "golden UI concept + viewer registration + screenshot-gated handoff (docs/ui-concepts + ui-golden + registry)",
+                  agent: "claude-code",
+                },
+              ]
+            : []),
           {
             role: "worker_web",
             roleName: "Frontend Lead",
@@ -405,10 +594,22 @@ export function registerPod(program: Command): void {
             ownership: "data quality/readiness invariants, economics reconciliation, and related tests",
           },
           {
+            role: "security",
+            roleName: "Security Lead",
+            branchSuffix: "security",
+            ownership: "authz, PII controls, export safety, and secure defaults (no leaks)",
+          },
+          {
             role: "qa",
             roleName: "QA Automation Lead",
             branchSuffix: "qa",
             ownership: "Playwright E2E + UAT scripts, regression coverage for known defect classes",
+          },
+          {
+            role: "verifier",
+            roleName: "Verifier",
+            branchSuffix: "verify",
+            ownership: "run required test commands, capture evidence, and block until gates are green",
           },
         ];
 
@@ -421,6 +622,7 @@ export function registerPod(program: Command): void {
           const s = await sm.spawn({
             projectId,
             branch,
+            agent: r.agent,
             prompt: "Pod setup in progress. Stand by for instructions.",
           });
           await setRoleMetadata(config, project, s.id, r.role, podId, integrationBranch);
@@ -491,7 +693,15 @@ export function registerPod(program: Command): void {
           spinner.text = "Sending role briefs";
           await sm.send(
             coordinator.id,
-            coordinatorPrompt(featureName, surfaceTag, integrationBranch, project.defaultBranch),
+            coordinatorPrompt(
+              featureName,
+              surfaceTag,
+              integrationBranch,
+              project.defaultBranch,
+              podId,
+              uiConceptId,
+              uiArea,
+            ),
           );
           for (const r of roles) {
             const target = spawned.find((x) => x.role === r.role);
@@ -499,14 +709,36 @@ export function registerPod(program: Command): void {
             await sm.send(
               target.sessionId,
               workerPrompt(
+                r.role,
                 r.roleName,
                 r.ownership,
                 featureName,
                 surfaceTag,
                 integrationBranch,
                 project.defaultBranch,
+                podId,
               ),
             );
+          }
+
+          // Post-brief: give the UI concepts lead the concrete concept id + viewer link, if enabled.
+          if (opts.ui === true && uiConceptId) {
+            const uiSession = spawned.find((x) => x.role === "ui_concept");
+            if (uiSession) {
+              await sm.send(
+                uiSession.sessionId,
+                [
+                  `UI concept id: ${uiConceptId}`,
+                  `UI area: ${uiArea}`,
+                  ``,
+                  `Target: create + register the concept so it renders in the local viewer:`,
+                  `- /dev/ui-concepts/${uiConceptId}`,
+                  `- /dev/ui-concepts/render/${uiConceptId}`,
+                  ``,
+                  `Required skill: helix-ui-concepts (and/or helix-ui-concepts-docs).`,
+                ].join("\n"),
+              );
+            }
           }
         } catch {
           // Non-fatal: user can message sessions manually.
@@ -537,4 +769,91 @@ export function registerPod(program: Command): void {
         console.log();
       },
     );
+
+  pod
+    .command("status")
+    .description("Show all sessions belonging to a pod id")
+    .argument("<project>", "Project ID from config")
+    .argument("<pod>", "Pod id (exact string printed by `ao pod start`)")
+    .action(async (projectId: string, podId: string) => {
+      const config = loadConfig();
+      const project = config.projects[projectId];
+      if (!project) {
+        console.error(chalk.red(`Unknown project: ${projectId}`));
+        process.exit(1);
+      }
+
+      const sm = await getSessionManager(config);
+      const sessions = await sm.list(projectId);
+      const matches = sessions.filter((s) => s.metadata?.["pod"] === podId);
+
+      if (matches.length === 0) {
+        console.log(chalk.yellow(`No sessions found for pod: ${podId}`));
+        return;
+      }
+
+      console.log(chalk.bold(`Pod: ${podId}`));
+      for (const s of matches) {
+        const role = s.metadata?.["role"] ?? "unknown";
+        const pr = s.metadata?.["pr"] ?? "-";
+        const branch = s.branch ?? "-";
+        const wt = s.workspacePath ?? "-";
+        console.log(`  ${chalk.green(s.id)}  ${chalk.dim(role)}  ${chalk.cyan(branch)}  ${chalk.dim(wt)}  ${chalk.blue(pr)}`);
+      }
+    });
+
+  pod
+    .command("sync")
+    .description("Rebroadcast the pod contract to all sessions (use after you edit requirements)")
+    .argument("<project>", "Project ID from config")
+    .argument("<pod>", "Pod id (exact string printed by `ao pod start`)")
+    .action(async (projectId: string, podId: string) => {
+      const config = loadConfig();
+      const project = config.projects[projectId];
+      if (!project) {
+        console.error(chalk.red(`Unknown project: ${projectId}`));
+        process.exit(1);
+      }
+
+      const sm = await getSessionManager(config);
+      const sessions = await sm.list(projectId);
+      const matches = sessions.filter((s) => s.metadata?.["pod"] === podId);
+
+      const coordinator = matches.find((s) => s.metadata?.["role"] === "coordinator");
+      if (!coordinator?.workspacePath) {
+        console.error(chalk.red(`Could not find coordinator workspace for pod: ${podId}`));
+        process.exit(1);
+      }
+
+      const contractPath = join(
+        coordinator.workspacePath,
+        ".codex",
+        "pods",
+        safeFsName(podId),
+        "CONTRACT.md",
+      );
+      if (!existsSync(contractPath)) {
+        console.error(chalk.red(`Contract not found: ${contractPath}`));
+        process.exit(1);
+      }
+
+      const contract = readFileSync(contractPath, "utf-8");
+      const message = [
+        `POD CONTRACT UPDATE (source of truth):`,
+        `- Pod: ${podId}`,
+        `- Contract: .codex/pods/${safeFsName(podId)}/CONTRACT.md`,
+        ``,
+        contract,
+      ].join("\n");
+
+      const spinner = ora(`Syncing contract to ${matches.length} session(s)`).start();
+      for (const s of matches) {
+        try {
+          await sm.send(s.id, message);
+        } catch {
+          // Best effort: keep going.
+        }
+      }
+      spinner.succeed("Contract synced");
+    });
 }

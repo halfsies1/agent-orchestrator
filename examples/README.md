@@ -76,6 +76,20 @@ Use this if:
 - You need agent-specific configuration
 - You're evaluating different AI coding assistants
 
+### [helix.yaml](./helix.yaml)
+
+**Helix "feature pod" SDLC template**
+
+Shows a Helix-optimized setup:
+- `worktreeDir: C:/helix/wt` for Windows worktrees
+- default agent = `codex` for implementation
+- `claude-code` with optional `--chrome` for UI concept workstreams (`ao pod start --ui`)
+
+Use this if:
+
+- You want a contract-first, screenshot-gated SDLC for Helix features
+- You want a dedicated UI concept workstream wired to `/dev/ui-concepts/*`
+
 ## Configuration Tips
 
 1. **Start simple** - Use `simple-github.yaml` as a starting point
