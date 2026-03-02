@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import type {
   PluginModule,
   Runtime,
@@ -22,6 +22,97 @@ function assertValidSessionId(id: string): void {
   if (!SAFE_SESSION_ID.test(id)) {
     throw new Error(`Invalid session ID "${id}": must match ${SAFE_SESSION_ID}`);
   }
+}
+
+/**
+ * Minimal POSIX-ish shellword splitter.
+ *
+ * This is intentionally tiny and only supports the quoting we generate in
+ * launch commands (single quotes + backslash escapes, plus basic double quotes).
+ *
+ * On Windows, `child_process.spawn(..., { shell: true })` defaults to cmd.exe,
+ * which does not understand POSIX single-quote escaping. To keep agent plugins
+ * (which use POSIX `shellEscape(...)`) working on Windows, we parse and spawn
+ * directly with `shell:false`.
+ */
+function splitPosixCommandLine(cmdline: string): string[] {
+  const args: string[] = [];
+  let cur = "";
+  let inToken = false;
+  let state: "unquoted" | "single" | "double" = "unquoted";
+
+  const push = () => {
+    args.push(cur);
+    cur = "";
+    inToken = false;
+  };
+
+  for (let i = 0; i < cmdline.length; i++) {
+    const ch = cmdline[i];
+
+    if (state === "unquoted") {
+      if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+        if (inToken) push();
+        continue;
+      }
+
+      inToken = true;
+
+      if (ch === "'") {
+        state = "single";
+        continue;
+      }
+      if (ch === '"') {
+        state = "double";
+        continue;
+      }
+      if (ch === "\\") {
+        i++;
+        if (i >= cmdline.length) {
+          cur += "\\";
+          continue;
+        }
+        cur += cmdline[i];
+        continue;
+      }
+
+      cur += ch;
+      continue;
+    }
+
+    if (state === "single") {
+      inToken = true;
+      if (ch === "'") {
+        state = "unquoted";
+        continue;
+      }
+      cur += ch;
+      continue;
+    }
+
+    // state === "double"
+    inToken = true;
+    if (ch === '"') {
+      state = "unquoted";
+      continue;
+    }
+    if (ch === "\\") {
+      i++;
+      if (i >= cmdline.length) {
+        cur += "\\";
+        continue;
+      }
+      cur += cmdline[i];
+      continue;
+    }
+    cur += ch;
+  }
+
+  if (state !== "unquoted") {
+    throw new Error("Invalid launchCommand: unterminated quote");
+  }
+  if (inToken) args.push(cur);
+  return args;
 }
 
 interface ProcessEntry {
@@ -57,17 +148,29 @@ export function create(): Runtime {
       };
       processes.set(handleId, entry);
 
-      // NOTE: shell:true is intentional — launchCommand comes from trusted YAML config
-      // and may contain pipes, redirects, or other shell syntax.
       let child: ChildProcess;
       try {
-        child = spawn(config.launchCommand, {
+        const commonSpawnOptions = {
           cwd: config.workspacePath,
           env: { ...process.env, ...config.environment },
-          stdio: ["pipe", "pipe", "pipe"],
-          shell: true,
+          stdio: ["pipe", "pipe", "pipe"] as StdioOptions,
           detached: true, // Own process group so destroy() can kill child commands
-        });
+        };
+
+        if (process.platform === "win32") {
+          // On Windows, `shell:true` uses cmd.exe by default, which doesn't understand
+          // the POSIX quoting used by our launchCommand strings. Parse and spawn directly.
+          const argv = splitPosixCommandLine(config.launchCommand);
+          if (argv.length === 0) {
+            throw new Error("Empty launchCommand");
+          }
+          const [command, ...args] = argv;
+          child = spawn(command, args, { ...commonSpawnOptions, shell: false });
+        } else {
+          // NOTE: shell:true is intentional — launchCommand comes from trusted YAML config
+          // and may contain pipes, redirects, or other shell syntax.
+          child = spawn(config.launchCommand, { ...commonSpawnOptions, shell: true });
+        }
       } catch (err: unknown) {
         processes.delete(handleId);
         const msg = err instanceof Error ? err.message : String(err);

@@ -16,7 +16,7 @@ import {
 } from "@composio/ao-core";
 import { execFile } from "node:child_process";
 import { readdir, readFile, stat, open, writeFile, mkdir, chmod } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -656,10 +656,18 @@ function createClaudeCodeAgent(): Agent {
       }
 
       if (config.systemPromptFile) {
-        // Use shell command substitution to read from file at launch time.
-        // This avoids tmux truncation when inlining 2000+ char prompts.
-        // The double quotes allow $() expansion; inner path is single-quoted for safety.
-        parts.push("--append-system-prompt", `"$(cat ${shellEscape(config.systemPromptFile)})"`);
+        if (process.platform === "win32") {
+          // Node's `shell:true` on Windows uses cmd.exe by default, which doesn't support POSIX $() substitution.
+          // Read the file in Node instead and collapse newlines to keep the argument safe on one line.
+          const raw = readFileSync(config.systemPromptFile, "utf-8");
+          const singleLine = raw.replace(/\r?\n/g, " ").trim();
+          parts.push("--append-system-prompt", shellEscape(singleLine));
+        } else {
+          // Use shell command substitution to read from file at launch time.
+          // This avoids tmux truncation when inlining 2000+ char prompts.
+          // The double quotes allow $() expansion; inner path is single-quoted for safety.
+          parts.push("--append-system-prompt", `"$(cat ${shellEscape(config.systemPromptFile)})"`);
+        }
       } else if (config.systemPrompt) {
         parts.push("--append-system-prompt", shellEscape(config.systemPrompt));
       }
