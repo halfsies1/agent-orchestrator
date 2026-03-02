@@ -396,6 +396,82 @@ function helixStatusTemplate(args: { podId: string; featureName: string; surface
   ].join("\n");
 }
 
+function helixPodProtocolTemplate(args: {
+  podId: string;
+  featureName: string;
+  surfaceTag: string;
+  integrationBranch: string;
+  defaultBranch: string;
+  uiConceptId: string | null;
+  uiArea: HelixUiArea | null;
+}): string {
+  const baseRel = `.codex/pods/${safeFsName(args.podId)}`;
+  const uiLine =
+    args.uiConceptId && args.uiArea
+      ? `UI concept: /dev/ui-concepts/${args.uiConceptId} (area: ${args.uiArea})`
+      : "UI concept: TBD";
+
+  return [
+    `# Pod protocol (CTO-grade)`,
+    ``,
+    `Pod: ${args.podId}`,
+    `Feature: ${args.featureName}`,
+    `Surface: ${args.surfaceTag}`,
+    `Integration branch: ${args.integrationBranch}`,
+    `Target merge: ${args.integrationBranch} -> ${args.defaultBranch}`,
+    uiLine,
+    ``,
+    `## Principles (non-negotiable)`,
+    `- Coordinator is the hub. No peer-to-peer agent chat as a coordination mechanism.`,
+    `- Files are the contract. State is communicated via artifacts under ${baseRel}/.`,
+    `- Evidence before assertions. "Done" requires links to tests + screenshots + reproducible steps.`,
+    `- No silent scope change. If requirements change, update CONTRACT.md and re-broadcast.`,
+    ``,
+    `## Required artifacts`,
+    `- Contract (requirements + gates): ${baseRel}/CONTRACT.md`,
+    `- Protocol (this file): ${baseRel}/PROTOCOL.md`,
+    `- Board (assignments / sequencing): ${baseRel}/BOARD.json`,
+    `- Evidence registry (ship/no-ship): ${baseRel}/evidence/EVIDENCE.json`,
+    `- Exec status (headline + blockers + next): ${baseRel}/STATUS.md`,
+    `- Status streams (append-only): ${baseRel}/status/<role>.jsonl`,
+    ``,
+    `## Ownership rules`,
+    `- Coordinator edits: CONTRACT.md, BOARD.json, STATUS.md`,
+    `- Each role appends only to: status/<role>.jsonl (append-only; do not rewrite old lines)`,
+    `- Evidence gates: gate owners attach evidence; verifier/coordinator validates before signoff`,
+    ``,
+    `## Status update schema (JSONL)`,
+    `One JSON object per line. Minimum fields:`,
+    `- ts (ISO timestamp)`,
+    `- role (string)`,
+    `- state: todo|doing|blocked|review|done`,
+    `- workItemId (string)`,
+    `- summary (1 paragraph)`,
+    `- testsRun (string[])`,
+    `- evidencePaths (string[])`,
+    `- blockers (string[])`,
+    `- asks (string[])`,
+    ``,
+    `Update triggers (minimum): start work, when blocked, when opening PR, when producing evidence, when done.`,
+    ``,
+    `## Evidence expectations`,
+    `A gate is not "pass" without evidence refs (paths/links). Typical evidence:`,
+    `- Playwright report path`,
+    `- Headed screenshots/video`,
+    `- Test command output excerpts (or file refs)`,
+    `- Notes on reconciliation/determinism checks (esp. economics)`,
+    ``,
+    `## Known regression classes to explicitly cover`,
+    `- Exports: no PII leaks; encoding correct (no mojibake)`,
+    `- Readiness vs Data Quality: no contradictory gates/states`,
+    `- Combined-org flows: no circular preconditions / dead ends`,
+    `- Workforce grid: no 400/500 while UI claims READY`,
+    `- AI-backed surfaces: never show raw JSON errors; exec-safe remediation UX`,
+    `- Economics: no silent nulls; totals reconcile OR show explicit Unknown + reason`,
+    ``,
+  ].join("\n");
+}
+
 function seedStatusJsonlIfMissing(filePath: string, seed: object): void {
   if (existsSync(filePath)) return;
   writeFileSync(filePath, JSON.stringify(seed) + "\n", "utf-8");
@@ -455,6 +531,7 @@ function coordinatorPrompt(
 ): string {
   const contractRel = `.codex/pods/${safeFsName(podId)}/CONTRACT.md`;
   const boardRel = `.codex/pods/${safeFsName(podId)}/BOARD.json`;
+  const protocolRel = `.codex/pods/${safeFsName(podId)}/PROTOCOL.md`;
   const evidenceRel = `.codex/pods/${safeFsName(podId)}/evidence/EVIDENCE.json`;
   const statusRel = `.codex/pods/${safeFsName(podId)}/status/coordinator.jsonl`;
   const uiLine = uiConceptId ? `/dev/ui-concepts/${uiConceptId} (area: ${uiArea})` : "TBD";
@@ -467,6 +544,7 @@ function coordinatorPrompt(
     `Pod: ${podId}`,
     `Contract: ${contractRel}`,
     `Board: ${boardRel}`,
+    `Protocol: ${protocolRel}`,
     `Evidence: ${evidenceRel}`,
     `Status stream (you): ${statusRel}`,
     `Status stream (workers): .codex/pods/${safeFsName(podId)}/status/<role>.jsonl`,
@@ -504,6 +582,7 @@ function workerPrompt(
 ): string {
   const contractRel = `.codex/pods/${safeFsName(podId)}/CONTRACT.md`;
   const boardRel = `.codex/pods/${safeFsName(podId)}/BOARD.json`;
+  const protocolRel = `.codex/pods/${safeFsName(podId)}/PROTOCOL.md`;
   const statusRel = `.codex/pods/${safeFsName(podId)}/status/${role}.jsonl`;
 
   const requiredSkills: string[] = [
@@ -524,6 +603,7 @@ function workerPrompt(
     `Integration branch: ${integrationBranch}`,
     `Pod contract: ${contractRel}`,
     `Pod board (read-only): ${boardRel}`,
+    `Pod protocol (read first): ${protocolRel}`,
     `Status stream (append-only): ${statusRel}`,
     ``,
     `Required skills (non-negotiable):`,
@@ -825,6 +905,18 @@ export function registerPod(program: Command): void {
 
           writeIfMissing(join(evidenceDir, "EVIDENCE.json"), helixEvidenceTemplate({ podId, featureName, surfaceTag }));
           writeIfMissing(join(podDir, "STATUS.md"), helixStatusTemplate({ podId, featureName, surfaceTag }));
+          writeIfMissing(
+            join(podDir, "PROTOCOL.md"),
+            helixPodProtocolTemplate({
+              podId,
+              featureName,
+              surfaceTag,
+              integrationBranch,
+              defaultBranch: project.defaultBranch,
+              uiConceptId,
+              uiArea: opts.ui === true ? uiArea : null,
+            }),
+          );
           seedStatusJsonlIfMissing(join(statusDir, "coordinator.jsonl"), {
             ts: isoNow(),
             role: "coordinator",
@@ -840,6 +932,7 @@ export function registerPod(program: Command): void {
           await bestEffortCommit(coordinator.workspacePath, "chore: seed pod comms artifacts", [
             `.codex/pods/${safeFsName(podId)}/BOARD.json`,
             `.codex/pods/${safeFsName(podId)}/STATUS.md`,
+            `.codex/pods/${safeFsName(podId)}/PROTOCOL.md`,
             `.codex/pods/${safeFsName(podId)}/status/coordinator.jsonl`,
             `.codex/pods/${safeFsName(podId)}/evidence/EVIDENCE.json`,
           ]);
@@ -1176,6 +1269,7 @@ export function registerPod(program: Command): void {
         `POD CONTRACT UPDATE (source of truth):`,
         `- Pod: ${podId}`,
         `- Contract: .codex/pods/${safeFsName(podId)}/CONTRACT.md`,
+        `- Protocol: .codex/pods/${safeFsName(podId)}/PROTOCOL.md`,
         `- Board: .codex/pods/${safeFsName(podId)}/BOARD.json`,
         `- Evidence: .codex/pods/${safeFsName(podId)}/evidence/EVIDENCE.json`,
         `- Status updates: .codex/pods/${safeFsName(podId)}/status/<role>.jsonl`,
