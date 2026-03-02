@@ -179,6 +179,13 @@ function writeIfMissing(filePath: string, content: string): void {
   writeFileSync(filePath, content, "utf-8");
 }
 
+type PodBoardItemStatus = "todo" | "doing" | "blocked" | "review" | "done";
+type EvidenceGateStatus = "todo" | "pass" | "fail" | "waived";
+
+function isoNow(): string {
+  return new Date().toISOString();
+}
+
 function helixContractTemplate(args: {
   podId: string;
   featureName: string;
@@ -251,6 +258,149 @@ function helixContractTemplate(args: {
   ].join("\n");
 }
 
+function helixBoardTemplate(args: {
+  podId: string;
+  featureName: string;
+  surfaceTag: string;
+  integrationBranch: string;
+  defaultBranch: string;
+  uiConceptId: string | null;
+  uiArea: HelixUiArea | null;
+  workstreams: Array<{
+    workItemId: string;
+    title: string;
+    ownerRole: string;
+    status: PodBoardItemStatus;
+    branch: string | null;
+    pr: string | null;
+    blocker: string | null;
+    next: string | null;
+  }>;
+}): string {
+  const doc = {
+    version: 1,
+    createdAt: isoNow(),
+    podId: args.podId,
+    featureName: args.featureName,
+    surfaceTag: args.surfaceTag,
+    integrationBranch: args.integrationBranch,
+    defaultBranch: args.defaultBranch,
+    ui: {
+      enabled: Boolean(args.uiConceptId && args.uiArea),
+      conceptId: args.uiConceptId,
+      area: args.uiArea,
+    },
+    items: args.workstreams,
+  };
+  return JSON.stringify(doc, null, 2) + "\n";
+}
+
+function helixEvidenceTemplate(args: { podId: string; featureName: string; surfaceTag: string }): string {
+  const gates: Array<{
+    gateId: string;
+    title: string;
+    ownerRole: string;
+    status: EvidenceGateStatus;
+    evidence: Array<{ ts: string; byRole: string; kind: string; ref: string; notes?: string }>;
+  }> = [
+    {
+      gateId: "ux_founder_approval",
+      title: "Founder UX approval (screenshots + parity evidence attached)",
+      ownerRole: "coordinator",
+      status: "todo",
+      evidence: [],
+    },
+    {
+      gateId: "playwright_e2e_headless",
+      title: "Playwright E2E headless (touched flows)",
+      ownerRole: "qa",
+      status: "todo",
+      evidence: [],
+    },
+    {
+      gateId: "playwright_e2e_headed",
+      title: "Playwright E2E headed + evidence (screenshots/video)",
+      ownerRole: "qa",
+      status: "todo",
+      evidence: [],
+    },
+    {
+      gateId: "security_pii_exports",
+      title: "Security: exports enforce authz + no PII leaks when people:pii:read=false",
+      ownerRole: "security",
+      status: "todo",
+      evidence: [],
+    },
+    {
+      gateId: "readiness_dq_reconcile",
+      title: "Readiness & Data Quality reconcile (no contradictory gates/states)",
+      ownerRole: "worker_data",
+      status: "todo",
+      evidence: [],
+    },
+    {
+      gateId: "deterministic_numbers",
+      title: "Decision-grade numbers reconcile OR show explicit Unknown + reason (no silent nulls)",
+      ownerRole: "worker_data",
+      status: "todo",
+      evidence: [],
+    },
+    {
+      gateId: "exec_safe_errors",
+      title: "Exec-safe errors (no raw JSON/stack traces; remediation CTAs)",
+      ownerRole: "worker_web",
+      status: "todo",
+      evidence: [],
+    },
+    {
+      gateId: "tests_and_verification",
+      title: "Required unit/integration tests + verification runs + artifacts captured",
+      ownerRole: "verifier",
+      status: "todo",
+      evidence: [],
+    },
+  ];
+
+  const doc = {
+    version: 1,
+    createdAt: isoNow(),
+    podId: args.podId,
+    featureName: args.featureName,
+    surfaceTag: args.surfaceTag,
+    gates,
+    notes: "",
+  };
+
+  return JSON.stringify(doc, null, 2) + "\n";
+}
+
+function helixStatusTemplate(args: { podId: string; featureName: string; surfaceTag: string }): string {
+  return [
+    `# Pod status`,
+    ``,
+    `Pod: ${args.podId}`,
+    `Feature: ${args.featureName}`,
+    `Surface: ${args.surfaceTag}`,
+    `As of: ${isoNow()}`,
+    ``,
+    `## Headline`,
+    `TBD`,
+    ``,
+    `## Blockers`,
+    `- None`,
+    ``,
+    `## Next`,
+    `- Update BOARD.json owners + sequencing`,
+    `- Collect worker status updates (JSONL) + evidence links`,
+    ``,
+  ].join("\n");
+}
+
+function seedStatusJsonlIfMissing(filePath: string, seed: object): void {
+  if (existsSync(filePath)) return;
+  writeFileSync(filePath, JSON.stringify(seed) + "\n", "utf-8");
+}
+
 async function bestEffortBootstrapHelixHandoff(
   workspacePath: string,
   owner: string,
@@ -304,6 +454,9 @@ function coordinatorPrompt(
   uiArea: HelixUiArea,
 ): string {
   const contractRel = `.codex/pods/${safeFsName(podId)}/CONTRACT.md`;
+  const boardRel = `.codex/pods/${safeFsName(podId)}/BOARD.json`;
+  const evidenceRel = `.codex/pods/${safeFsName(podId)}/evidence/EVIDENCE.json`;
+  const statusRel = `.codex/pods/${safeFsName(podId)}/status/coordinator.jsonl`;
   const uiLine = uiConceptId ? `/dev/ui-concepts/${uiConceptId} (area: ${uiArea})` : "TBD";
   return [
     `You are the Helix Feature Pod Lead (senior MBB partner + CTO).`,
@@ -313,6 +466,10 @@ function coordinatorPrompt(
     `Integration branch: ${integrationBranch}`,
     `Pod: ${podId}`,
     `Contract: ${contractRel}`,
+    `Board: ${boardRel}`,
+    `Evidence: ${evidenceRel}`,
+    `Status stream (you): ${statusRel}`,
+    `Status stream (workers): .codex/pods/${safeFsName(podId)}/status/<role>.jsonl`,
     `UI concept: ${uiLine}`,
     ``,
     `Mission: ship a decision-grade, enterprise-ready feature with zero silent side effects.`,
@@ -331,6 +488,7 @@ function coordinatorPrompt(
     `Working model:`,
     `- Workers open PRs targeting base branch ${integrationBranch} (not ${defaultBranch}).`,
     `- You keep the integration PR to ${defaultBranch} coherent, and you drive sign-off.`,
+    `- Communication is hub-and-spoke: workers emit structured updates via JSONL; you summarize + assign via BOARD.json.`,
   ].join("\n");
 }
 
@@ -345,6 +503,8 @@ function workerPrompt(
   podId: string,
 ): string {
   const contractRel = `.codex/pods/${safeFsName(podId)}/CONTRACT.md`;
+  const boardRel = `.codex/pods/${safeFsName(podId)}/BOARD.json`;
+  const statusRel = `.codex/pods/${safeFsName(podId)}/status/${role}.jsonl`;
 
   const requiredSkills: string[] = [
     "test-driven-development (before implementing any behavior)",
@@ -363,9 +523,26 @@ function workerPrompt(
     `Surface: ${surfaceTag}`,
     `Integration branch: ${integrationBranch}`,
     `Pod contract: ${contractRel}`,
+    `Pod board (read-only): ${boardRel}`,
+    `Status stream (append-only): ${statusRel}`,
     ``,
     `Required skills (non-negotiable):`,
     ...requiredSkills.map((s) => `- ${s}`),
+    ``,
+    `Communication protocol (do NOT do peer-to-peer agent chat):`,
+    `- Append a JSONL status update at start, when blocked, when opening PR, and when producing evidence.`,
+    `- JSONL schema (one JSON object per line):`,
+    `  - ts: ISO 8601 timestamp`,
+    `  - role: "${role}"`,
+    `  - state: todo|doing|blocked|review|done`,
+    `  - workItemId: short stable id (e.g. web|api|data|security|qa|verify|ui|decision)`,
+    `  - summary: one-paragraph update`,
+    `  - testsRun: string[] (commands)`,
+    `  - evidencePaths: string[] (paths/links to screenshots/reports/logs)`,
+    `  - blockers: string[]`,
+    `  - asks: string[] (what you need from coordinator/others)`,
+    `Example JSONL line:`,
+    `{"ts":"${isoNow()}","role":"${role}","state":"doing","workItemId":"<id>","summary":"...","testsRun":[],"evidencePaths":[],"blockers":[],"asks":[]}`,
     ``,
     `Non-negotiables:`,
     `- No silent side effects. Any behavior change must be described in PR.`,
@@ -613,6 +790,61 @@ export function registerPod(program: Command): void {
           },
         ];
 
+        // Seed pod comms artifacts in the coordinator workspace (best effort).
+        if (coordinator.workspacePath) {
+          const podDir = podArtifactsDir(coordinator.workspacePath, podId);
+          const evidenceDir = join(podDir, "evidence");
+          const statusDir = join(podDir, "status");
+          mkdirSync(evidenceDir, { recursive: true });
+          mkdirSync(statusDir, { recursive: true });
+
+          const workstreams = roles.map((r) => ({
+            workItemId: r.role,
+            title: r.roleName,
+            ownerRole: r.role,
+            status: "todo" as const,
+            branch: makeRoleBranch(integrationBranch, r.branchSuffix),
+            pr: null,
+            blocker: null,
+            next: `Open a draft PR into ${integrationBranch}`,
+          }));
+
+          writeIfMissing(
+            join(podDir, "BOARD.json"),
+            helixBoardTemplate({
+              podId,
+              featureName,
+              surfaceTag,
+              integrationBranch,
+              defaultBranch: project.defaultBranch,
+              uiConceptId,
+              uiArea: opts.ui === true ? uiArea : null,
+              workstreams,
+            }),
+          );
+
+          writeIfMissing(join(evidenceDir, "EVIDENCE.json"), helixEvidenceTemplate({ podId, featureName, surfaceTag }));
+          writeIfMissing(join(podDir, "STATUS.md"), helixStatusTemplate({ podId, featureName, surfaceTag }));
+          seedStatusJsonlIfMissing(join(statusDir, "coordinator.jsonl"), {
+            ts: isoNow(),
+            role: "coordinator",
+            state: "doing",
+            workItemId: "coord",
+            summary: "Pod spawned; awaiting worker briefs and PRs",
+            testsRun: [],
+            evidencePaths: [],
+            blockers: [],
+            asks: [],
+          });
+
+          await bestEffortCommit(coordinator.workspacePath, "chore: seed pod comms artifacts", [
+            `.codex/pods/${safeFsName(podId)}/BOARD.json`,
+            `.codex/pods/${safeFsName(podId)}/STATUS.md`,
+            `.codex/pods/${safeFsName(podId)}/status/coordinator.jsonl`,
+            `.codex/pods/${safeFsName(podId)}/evidence/EVIDENCE.json`,
+          ]);
+        }
+
         const spawned: Array<{ role: string; sessionId: string; branch: string | null; worktree: string | null }> =
           [];
 
@@ -627,6 +859,24 @@ export function registerPod(program: Command): void {
           });
           await setRoleMetadata(config, project, s.id, r.role, podId, integrationBranch);
           spawned.push({ role: r.role, sessionId: s.id, branch: s.branch, worktree: s.workspacePath });
+
+          // Seed worker status stream file (not committed; used for cross-session visibility via `ao pod status --updates`).
+          if (s.workspacePath) {
+            const podDir = podArtifactsDir(s.workspacePath, podId);
+            const statusDir = join(podDir, "status");
+            mkdirSync(statusDir, { recursive: true });
+            seedStatusJsonlIfMissing(join(statusDir, `${r.role}.jsonl`), {
+              ts: isoNow(),
+              role: r.role,
+              state: "todo",
+              workItemId: r.role,
+              summary: "Pod spawned; awaiting brief",
+              testsRun: [],
+              evidencePaths: [],
+              blockers: [],
+              asks: [],
+            });
+          }
 
           // Helix handoff + draft PR for each worker (best effort)
           if (opts.pr !== false && s.workspacePath) {
@@ -775,7 +1025,11 @@ export function registerPod(program: Command): void {
     .description("Show all sessions belonging to a pod id")
     .argument("<project>", "Project ID from config")
     .argument("<pod>", "Pod id (exact string printed by `ao pod start`)")
-    .action(async (projectId: string, podId: string) => {
+    .option("--updates", "Show latest JSONL status updates from each session workspace")
+    .option("--tail <n>", "Lines per role when showing updates (default: 3)", "3")
+    .option("--board", "Show BOARD.json from the coordinator workspace (if present)")
+    .option("--evidence", "Show evidence gate summary from EVIDENCE.json (if present)")
+    .action(async (projectId: string, podId: string, opts: { updates?: boolean; tail?: string; board?: boolean; evidence?: boolean }) => {
       const config = loadConfig();
       const project = config.projects[projectId];
       if (!project) {
@@ -799,6 +1053,86 @@ export function registerPod(program: Command): void {
         const branch = s.branch ?? "-";
         const wt = s.workspacePath ?? "-";
         console.log(`  ${chalk.green(s.id)}  ${chalk.dim(role)}  ${chalk.cyan(branch)}  ${chalk.dim(wt)}  ${chalk.blue(pr)}`);
+      }
+
+      const coordinator = matches.find((s) => s.metadata?.["role"] === "coordinator");
+      const coordinatorPodDir = coordinator?.workspacePath ? podArtifactsDir(coordinator.workspacePath, podId) : null;
+      const showUpdates = opts.updates === true;
+      const tail = Math.max(1, Number.parseInt(String(opts.tail ?? "3"), 10) || 3);
+
+      if (opts.board === true && coordinatorPodDir) {
+        const boardPath = join(coordinatorPodDir, "BOARD.json");
+        console.log(chalk.bold("\nBoard"));
+        if (!existsSync(boardPath)) {
+          console.log(chalk.yellow(`  not found: ${boardPath}`));
+        } else {
+          try {
+            const board = JSON.parse(readFileSync(boardPath, "utf-8")) as {
+              items?: Array<{ workItemId?: string; title?: string; ownerRole?: string; status?: string; pr?: string | null; blocker?: string | null }>;
+            };
+            for (const it of board.items ?? []) {
+              const id = it.workItemId ?? "-";
+              const st = it.status ?? "-";
+              const owner = it.ownerRole ?? "-";
+              const title = it.title ?? "-";
+              const pr = it.pr ? ` ${chalk.blue(it.pr)}` : "";
+              const blocker = it.blocker ? ` ${chalk.red(`BLOCKED: ${it.blocker}`)}` : "";
+              console.log(`  ${chalk.cyan(id)}  ${chalk.dim(st)}  ${chalk.dim(owner)}  ${title}${pr}${blocker}`);
+            }
+          } catch {
+            console.log(chalk.yellow(`  failed to parse; raw file: ${boardPath}`));
+          }
+        }
+      }
+
+      if (opts.evidence === true && coordinatorPodDir) {
+        const evidencePath = join(coordinatorPodDir, "evidence", "EVIDENCE.json");
+        console.log(chalk.bold("\nEvidence gates"));
+        if (!existsSync(evidencePath)) {
+          console.log(chalk.yellow(`  not found: ${evidencePath}`));
+        } else {
+          try {
+            const ev = JSON.parse(readFileSync(evidencePath, "utf-8")) as {
+              gates?: Array<{ gateId?: string; title?: string; ownerRole?: string; status?: string }>;
+            };
+            for (const g of ev.gates ?? []) {
+              const id = g.gateId ?? "-";
+              const st = g.status ?? "-";
+              const owner = g.ownerRole ?? "-";
+              const title = g.title ?? "-";
+              console.log(`  ${chalk.cyan(id)}  ${chalk.dim(st)}  ${chalk.dim(owner)}  ${title}`);
+            }
+          } catch {
+            console.log(chalk.yellow(`  failed to parse; raw file: ${evidencePath}`));
+          }
+        }
+      }
+
+      if (showUpdates) {
+        console.log(chalk.bold(`\nLatest updates (tail=${tail})`));
+        for (const s of matches) {
+          const role = s.metadata?.["role"] ?? "unknown";
+          if (!s.workspacePath) continue;
+          const statusPath = join(s.workspacePath, ".codex", "pods", safeFsName(podId), "status", `${role}.jsonl`);
+          console.log(chalk.bold(`\n${role}  ${chalk.dim(statusPath)}`));
+          if (!existsSync(statusPath)) {
+            console.log(chalk.yellow("  (no status file)"));
+            continue;
+          }
+          try {
+            const raw = readFileSync(statusPath, "utf-8");
+            const lines = raw
+              .split(/\r?\n/)
+              .map((l) => l.trim())
+              .filter(Boolean);
+            const slice = lines.slice(Math.max(0, lines.length - tail));
+            for (const line of slice) {
+              console.log(`  ${line}`);
+            }
+          } catch {
+            console.log(chalk.yellow("  (failed to read)"));
+          }
+        }
       }
     });
 
@@ -842,6 +1176,9 @@ export function registerPod(program: Command): void {
         `POD CONTRACT UPDATE (source of truth):`,
         `- Pod: ${podId}`,
         `- Contract: .codex/pods/${safeFsName(podId)}/CONTRACT.md`,
+        `- Board: .codex/pods/${safeFsName(podId)}/BOARD.json`,
+        `- Evidence: .codex/pods/${safeFsName(podId)}/evidence/EVIDENCE.json`,
+        `- Status updates: .codex/pods/${safeFsName(podId)}/status/<role>.jsonl`,
         ``,
         contract,
       ].join("\n");
