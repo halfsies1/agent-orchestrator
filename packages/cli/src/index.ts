@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
+import { readFileSync } from "node:fs";
 import { registerInit } from "./commands/init.js";
 import { registerStatus } from "./commands/status.js";
 import { registerSpawn, registerBatchSpawn } from "./commands/spawn.js";
@@ -14,10 +15,21 @@ import { registerPod } from "./commands/pod.js";
 
 const program = new Command();
 
+function getCliVersion(): string {
+  try {
+    const pkgUrl = new URL("../package.json", import.meta.url);
+    const raw = readFileSync(pkgUrl, "utf-8");
+    const parsed = JSON.parse(raw) as { version?: string };
+    return parsed.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
 program
   .name("ao")
   .description("Agent Orchestrator — manage parallel AI coding agents")
-  .version("0.1.0");
+  .version(getCliVersion());
 
 registerInit(program);
 registerStart(program);

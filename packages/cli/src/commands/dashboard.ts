@@ -7,6 +7,32 @@ import { loadConfig } from "@composio/ao-core";
 import { findWebDir, buildDashboardEnv } from "../lib/web-dir.js";
 import { cleanNextCache, findRunningDashboardPid, findProcessWebDir, waitForPortFree } from "../lib/dashboard-rebuild.js";
 
+function openBrowser(url: string): void {
+  const platform = process.platform;
+
+  const spawnBestEffort = (cmd: string, args: string[]) => {
+    const p = spawn(cmd, args, { stdio: "ignore", detached: true });
+    p.unref();
+    p.on("error", () => {
+      // Best-effort only
+    });
+  };
+
+  if (platform === "darwin") {
+    spawnBestEffort("open", [url]);
+    return;
+  }
+
+  if (platform === "win32") {
+    // `start` is a cmd.exe builtin. Empty title ("") prevents url being treated as title.
+    spawnBestEffort("cmd", ["/c", "start", "", url]);
+    return;
+  }
+
+  // Linux and other unix-like platforms
+  spawnBestEffort("xdg-open", [url]);
+}
+
 export function registerDashboard(program: Command): void {
   program
     .command("dashboard")
@@ -98,12 +124,7 @@ export function registerDashboard(program: Command): void {
 
       if (opts.open !== false) {
         browserTimer = setTimeout(() => {
-          const browser = spawn("open", [`http://localhost:${port}`], {
-            stdio: "ignore",
-          });
-          browser.on("error", () => {
-            // Ignore — browser open is best-effort
-          });
+          openBrowser(`http://localhost:${port}`);
         }, 3000);
       }
 

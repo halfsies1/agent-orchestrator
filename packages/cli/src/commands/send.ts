@@ -96,7 +96,7 @@ export function registerSend(program: Command): void {
               console.log(chalk.yellow("Timeout waiting for idle. Sending anyway."));
               break;
             }
-            await sleep(5000);
+            await sleep(1000);
           }
         }
 

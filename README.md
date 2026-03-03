@@ -38,19 +38,26 @@ Agent Orchestrator manages fleets of AI coding agents working in parallel on you
 ## Quick Start
 
 ```bash
-# Install
+# Install CLI (if published)
+npm install -g @composio/agent-orchestrator
+
+# OR: install from source (recommended if you also want the dashboard)
 git clone https://github.com/ComposioHQ/agent-orchestrator.git
-cd agent-orchestrator && bash scripts/setup.sh
+cd agent-orchestrator
+bash scripts/setup.sh   # macOS/Linux
+pwsh scripts/setup.ps1  # Windows
 
 # Configure your project
 cd ~/your-project && ao init --auto
 
-# Launch and spawn an agent
+# Start orchestrator (dashboard optional)
 ao start
+
+# Spawn an agent
 ao spawn my-project 123    # GitHub issue, Linear ticket, or ad-hoc
 ```
 
-Dashboard opens at `http://localhost:3000`. Run `ao status` for the CLI view.
+If the dashboard is installed, it opens at `http://localhost:3000`. Run `ao status` for the CLI view.
 
 ## How It Works
 

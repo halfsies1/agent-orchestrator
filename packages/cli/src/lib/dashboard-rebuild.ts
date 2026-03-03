@@ -29,10 +29,10 @@ export async function findProcessWebDir(pid: string): Promise<string | null> {
   const lsofDetail = await execSilent("lsof", ["-p", pid, "-Ffn"]);
   if (!lsofDetail) return null;
 
-  // lsof -Fn outputs lines like "n/path/to/cwd" — the cwd entry follows "fcwd"
+  // lsof -Fn outputs lines like "n<path>" — the cwd entry follows "fcwd"
   const lines = lsofDetail.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i] === "fcwd" && i + 1 < lines.length && lines[i + 1]?.startsWith("n/")) {
+    if (lines[i] === "fcwd" && i + 1 < lines.length && lines[i + 1]?.startsWith("n")) {
       const cwd = lines[i + 1].slice(1);
       if (existsSync(resolve(cwd, "package.json"))) {
         return cwd;

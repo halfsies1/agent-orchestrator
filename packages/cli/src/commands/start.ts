@@ -144,27 +144,40 @@ export function registerStart(program: Command): void {
           const spinner = ora();
           let dashboardProcess: ChildProcess | null = null;
           let exists = false; // Track whether orchestrator session already exists
+          let dashboardSkippedReason: string | null = null;
 
           if (opts?.dashboard !== false) {
-            const webDir = findWebDir();
-            if (!existsSync(resolve(webDir, "package.json"))) {
-              throw new Error("Could not find @composio/ao-web package. Run: pnpm install");
+            let candidateWebDir: string | null = null;
+            try {
+              candidateWebDir = findWebDir();
+            } catch {
+              candidateWebDir = null;
             }
 
-            if (opts?.rebuild) {
-              await cleanNextCache(webDir);
-            }
+            const webDir =
+              candidateWebDir && existsSync(resolve(candidateWebDir, "package.json"))
+                ? candidateWebDir
+                : null;
 
-            spinner.start("Starting dashboard");
-            dashboardProcess = await startDashboard(
-              port,
-              webDir,
-              config.configPath,
-              config.terminalPort,
-              config.directTerminalPort,
-            );
-            spinner.succeed(`Dashboard starting on http://localhost:${port}`);
-            console.log(chalk.dim("  (Dashboard will be ready in a few seconds)\n"));
+            if (!webDir) {
+              dashboardSkippedReason =
+                "Dashboard package (@composio/ao-web) not found. Continuing without dashboard.";
+            } else {
+              if (opts?.rebuild) {
+                await cleanNextCache(webDir);
+              }
+
+              spinner.start("Starting dashboard");
+              dashboardProcess = await startDashboard(
+                port,
+                webDir,
+                config.configPath,
+                config.terminalPort,
+                config.directTerminalPort,
+              );
+              spinner.succeed(`Dashboard starting on http://localhost:${port}`);
+              console.log(chalk.dim("  (Dashboard will be ready in a few seconds)\n"));
+            }
           }
 
           // Create orchestrator session (unless --no-orchestrator or already exists)
@@ -212,8 +225,16 @@ export function registerStart(program: Command): void {
           // Print summary based on what was actually started
           console.log(chalk.bold.green("\n✓ Startup complete\n"));
 
-          if (opts?.dashboard !== false) {
+          if (dashboardProcess) {
             console.log(chalk.cyan("Dashboard:"), `http://localhost:${port}`);
+          } else if (dashboardSkippedReason) {
+            console.log(chalk.cyan("Dashboard:"), chalk.yellow("not started"));
+            console.log(chalk.dim(`  ${dashboardSkippedReason}`));
+            console.log(
+              chalk.dim(
+                "  To run it from source: clone the repo, run `pnpm install`, then `ao dashboard`.",
+              ),
+            );
           }
 
           if (opts?.orchestrator !== false && !exists) {
