@@ -68,6 +68,7 @@ If you modify pod comms behavior or artifacts produced by `ao pod start`, update
    - `ao pod status <podId> --updates --tail 50`
    - `ao pod status <podId> --evidence`
 3. Change requirements: edit `.codex/pods/<podId>/CONTRACT.md`, then `ao pod sync <podId>`.
+4. Gate check (ship/no-ship): `ao pod verify <podId> --project <projectId>`
 
 ### Merge-to-main (merge captain workflow)
 
@@ -80,4 +81,5 @@ Goal: keep merges **serialized and boring**.
 3. Merge the integration PR to `main` only after:
    - verifier gates are green, and
    - decision guardian sign-off is recorded (acceptance criteria met, governance language correct).
+   - `ao pod verify <podId> --project <projectId>` prints `SHIP: YES`
 4. Never rely on “agent confidence”. Merge only with evidence.

@@ -145,3 +145,12 @@ Hard rule:
 
 - The UI must **not** become a second source of truth. It reads only.
 
+## Verification (ship/no-ship)
+
+Run a deterministic gate check from the coordinator workspace (or pass `--repo` to point at an integration branch checkout):
+
+```bash
+ao pod verify <podId> --project <projectId>
+# or
+ao pod verify <podId> --repo <path-to-integration-branch-checkout>
+```

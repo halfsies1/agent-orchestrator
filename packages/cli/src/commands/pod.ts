@@ -1287,4 +1287,277 @@ export function registerPod(program: Command): void {
       }
       spinner.succeed("Contract synced");
     });
+
+  pod
+    .command("verify")
+    .description("CTO gate: verify pod board + evidence indicate ship-ready")
+    .argument("<pod>", "Pod id (exact string printed by `ao pod start`)")
+    .option("--project <project>", "Project ID from config (optional; used to locate coordinator workspace)")
+    .option("--repo <path>", "Repo/workspace path containing .codex/pods/<podId> (overrides session lookup)")
+    .option("--json", "Output a machine-readable JSON report")
+    .action(async (podId: string, opts: { project?: string; repo?: string; json?: boolean }) => {
+      function fail(msg: string): never {
+        console.error(chalk.red(msg));
+        process.exit(1);
+      }
+
+      type VerifyFailure = { code: string; message: string; path?: string };
+      type VerifySummary = {
+        podId: string;
+        repoRoot: string;
+        podDir: string;
+        board?: {
+          total: number;
+          byStatus: Record<string, number>;
+          incomplete: Array<{ workItemId: string; status: string; ownerRole: string; title: string; blocker: string | null }>;
+        };
+        evidence?: {
+          total: number;
+          byStatus: Record<string, number>;
+          failing: Array<{ gateId: string; status: string; ownerRole: string; title: string }>;
+          passMissingEvidence: Array<{ gateId: string; ownerRole: string; title: string }>;
+        };
+        missingFiles: string[];
+        failures: VerifyFailure[];
+        shipReady: boolean;
+      };
+
+      // 1) Resolve repo/workspace root (where .codex/pods/<podId> lives)
+      let repoRoot: string | null = opts.repo ? String(opts.repo) : null;
+      let repoSource: string = opts.repo ? "--repo" : "unknown";
+
+      if (!repoRoot) {
+        const requestedProject = String(opts.project ?? "").trim() || null;
+
+        try {
+          const config = loadConfig();
+          const projectId =
+            requestedProject ?? (Object.keys(config.projects ?? {}).length === 1 ? Object.keys(config.projects)[0] : null);
+          const project = projectId ? config.projects[projectId] : null;
+
+          if (projectId && !project) {
+            fail(`Unknown project: ${projectId}`);
+          }
+
+          if (projectId && project) {
+            const sm = await getSessionManager(config);
+            const sessions = await sm.list(projectId);
+            const matches = sessions.filter((s) => s.metadata?.["pod"] === podId);
+            const coordinator = matches.find((s) => s.metadata?.["role"] === "coordinator");
+            const workspace = coordinator?.workspacePath ?? matches.find((s) => s.workspacePath)?.workspacePath ?? null;
+
+            if (workspace) {
+              repoRoot = workspace;
+              repoSource = `sessions:${projectId}`;
+            }
+          }
+        } catch {
+          // Best-effort: allow local verification from cwd when config/session lookup is unavailable.
+        }
+      }
+
+      if (!repoRoot) {
+        repoRoot = process.cwd();
+        repoSource = "cwd";
+      }
+
+      const podDir = podArtifactsDir(repoRoot, podId);
+      const missingFiles: string[] = [];
+      const failures: VerifyFailure[] = [];
+
+      const requiredFiles = [
+        join(podDir, "PROTOCOL.md"),
+        join(podDir, "CONTRACT.md"),
+        join(podDir, "BOARD.json"),
+        join(podDir, "evidence", "EVIDENCE.json"),
+      ];
+
+      for (const p of requiredFiles) {
+        if (!existsSync(p)) missingFiles.push(p);
+      }
+
+      // 2) Parse artifacts
+      let boardSummary: VerifySummary["board"] | undefined;
+      let evidenceSummary: VerifySummary["evidence"] | undefined;
+
+      const boardPath = join(podDir, "BOARD.json");
+      if (existsSync(boardPath)) {
+        try {
+          const board = JSON.parse(readFileSync(boardPath, "utf-8")) as {
+            items?: Array<{
+              workItemId?: string;
+              title?: string;
+              ownerRole?: string;
+              status?: string;
+              blocker?: string | null;
+            }>;
+          };
+          const items = board.items ?? [];
+          const byStatus: Record<string, number> = {};
+          const incomplete: Array<{ workItemId: string; status: string; ownerRole: string; title: string; blocker: string | null }> = [];
+
+          for (const it of items) {
+            const st = String(it.status ?? "unknown");
+            byStatus[st] = (byStatus[st] ?? 0) + 1;
+            if (st !== "done") {
+              incomplete.push({
+                workItemId: String(it.workItemId ?? "-"),
+                status: st,
+                ownerRole: String(it.ownerRole ?? "-"),
+                title: String(it.title ?? "-"),
+                blocker: it.blocker ?? null,
+              });
+            }
+          }
+
+          boardSummary = { total: items.length, byStatus, incomplete };
+        } catch {
+          failures.push({ code: "board_parse_failed", message: "Failed to parse BOARD.json", path: boardPath });
+        }
+      }
+
+      const evidencePath = join(podDir, "evidence", "EVIDENCE.json");
+      if (existsSync(evidencePath)) {
+        try {
+          const ev = JSON.parse(readFileSync(evidencePath, "utf-8")) as {
+            gates?: Array<{
+              gateId?: string;
+              title?: string;
+              ownerRole?: string;
+              status?: string;
+              evidence?: Array<{ ts?: string; byRole?: string; kind?: string; ref?: string }>;
+            }>;
+          };
+          const gates = ev.gates ?? [];
+          const byStatus: Record<string, number> = {};
+          const failing: Array<{ gateId: string; status: string; ownerRole: string; title: string }> = [];
+          const passMissingEvidence: Array<{ gateId: string; ownerRole: string; title: string }> = [];
+
+          for (const g of gates) {
+            const st = String(g.status ?? "unknown");
+            byStatus[st] = (byStatus[st] ?? 0) + 1;
+
+            const gateId = String(g.gateId ?? "-");
+            const ownerRole = String(g.ownerRole ?? "-");
+            const title = String(g.title ?? "-");
+
+            if (st !== "pass" && st !== "waived") {
+              failing.push({ gateId, status: st, ownerRole, title });
+            }
+
+            if (st === "pass") {
+              const evidence = g.evidence ?? [];
+              const hasRef = evidence.some((e) => String(e.ref ?? "").trim().length > 0);
+              if (!hasRef) {
+                passMissingEvidence.push({ gateId, ownerRole, title });
+              }
+            }
+          }
+
+          evidenceSummary = {
+            total: gates.length,
+            byStatus,
+            failing,
+            passMissingEvidence,
+          };
+        } catch {
+          failures.push({ code: "evidence_parse_failed", message: "Failed to parse EVIDENCE.json", path: evidencePath });
+        }
+      }
+
+      if (missingFiles.length > 0) {
+        failures.push({ code: "missing_required_files", message: "Missing required pod artifacts" });
+      }
+
+      if (boardSummary && boardSummary.incomplete.length > 0) {
+        failures.push({ code: "board_incomplete", message: "BOARD.json contains non-done work items" });
+      }
+
+      if (boardSummary && boardSummary.total === 0) {
+        failures.push({ code: "board_empty", message: "BOARD.json has no items (cannot verify ownership/progress)" });
+      }
+
+      if (evidenceSummary && evidenceSummary.failing.length > 0) {
+        failures.push({ code: "gates_not_passing", message: "EVIDENCE.json contains non-pass/waived gates" });
+      }
+
+      if (evidenceSummary && evidenceSummary.passMissingEvidence.length > 0) {
+        failures.push({ code: "pass_missing_evidence", message: "Some passing gates have no evidence refs" });
+      }
+
+      if (evidenceSummary && evidenceSummary.total === 0) {
+        failures.push({ code: "gates_empty", message: "EVIDENCE.json has no gates (cannot verify ship readiness)" });
+      }
+
+      const shipReady = failures.length === 0;
+
+      const summary: VerifySummary = {
+        podId,
+        repoRoot,
+        podDir,
+        board: boardSummary,
+        evidence: evidenceSummary,
+        missingFiles,
+        failures,
+        shipReady,
+      };
+
+      if (opts.json === true) {
+        console.log(JSON.stringify(summary, null, 2));
+      } else {
+        console.log(chalk.bold(`Pod verify: ${chalk.cyan(podId)}`));
+        console.log(`  Repo root:  ${chalk.dim(repoRoot)} ${chalk.dim(`(${repoSource})`)}`);
+        console.log(`  Pod dir:    ${chalk.dim(podDir)}`);
+
+        console.log(chalk.bold("\nBoard"));
+        if (!boardSummary) {
+          console.log(chalk.yellow(`  not available (missing or unreadable): ${boardPath}`));
+        } else {
+          const done = boardSummary.byStatus["done"] ?? 0;
+          console.log(`  Items: ${done}/${boardSummary.total} done`);
+          for (const it of boardSummary.incomplete) {
+            const blocker = it.blocker ? ` ${chalk.red(`BLOCKED: ${it.blocker}`)}` : "";
+            console.log(
+              `  ${chalk.cyan(it.workItemId)}  ${chalk.dim(it.status)}  ${chalk.dim(it.ownerRole)}  ${it.title}${blocker}`,
+            );
+          }
+        }
+
+        console.log(chalk.bold("\nEvidence gates"));
+        if (!evidenceSummary) {
+          console.log(chalk.yellow(`  not available (missing or unreadable): ${evidencePath}`));
+        } else {
+          const pass = (evidenceSummary.byStatus["pass"] ?? 0) + (evidenceSummary.byStatus["waived"] ?? 0);
+          console.log(`  Gates: ${pass}/${evidenceSummary.total} pass/waived`);
+
+          for (const g of evidenceSummary.failing) {
+            console.log(`  ${chalk.cyan(g.gateId)}  ${chalk.dim(g.status)}  ${chalk.dim(g.ownerRole)}  ${g.title}`);
+          }
+
+          for (const g of evidenceSummary.passMissingEvidence) {
+            console.log(chalk.yellow(`  ${g.gateId}  pass but missing evidence refs (${g.ownerRole})`));
+          }
+        }
+
+        if (missingFiles.length > 0) {
+          console.log(chalk.bold("\nMissing required files"));
+          for (const p of missingFiles) {
+            console.log(chalk.red(`  ${p}`));
+          }
+        }
+
+        if (shipReady) {
+          console.log(chalk.bold.green("\nSHIP: YES"));
+        } else {
+          console.log(chalk.bold.red("\nSHIP: NO"));
+          console.log(
+            chalk.dim(
+              `\nFix the failures above. If you are not in the coordinator workspace, re-run with:\n  ao pod verify ${podId} --repo <path-to-integration-branch-checkout>\n`,
+            ),
+          );
+        }
+      }
+
+      if (!shipReady) process.exit(1);
+    });
 }
