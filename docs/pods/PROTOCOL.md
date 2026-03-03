@@ -33,6 +33,20 @@ Required files:
 - `.codex/pods/<podId>/evidence/EVIDENCE.json`
   - Gate tracker + evidence registry (gate-owner writes evidence; verifier/coordinator sign off).
 
+## Templates (roster + gates)
+
+`ao pod start` seeds the pod roster and evidence gates from a template.
+
+- Built-in templates: `helix`, `minimal`
+- Custom templates: pass `--template <path>` (YAML or JSON; resolved relative to the project repo path)
+
+Templates control:
+
+- Which role sessions are spawned
+- Which gates are created in `.codex/pods/<podId>/evidence/EVIDENCE.json`
+
+The template is applied at pod creation time. After a pod is started, the on-disk artifacts under `.codex/pods/<podId>/` are the contract.
+
 ## Ownership and write permissions
 
 To prevent “everyone editing everything”:

@@ -62,12 +62,13 @@ If you modify pod comms behavior or artifacts produced by `ao pod start`, update
 
 ### Pod workflow (Helix-style)
 
-1. Start a pod: `ao pod start <podId> --project <projectId> --feature "<name>" --surface <tag>`
+1. Start a pod: `ao pod start <projectId> "<feature name>" --surface <tag> [--template helix|minimal|<path>] [--ui]`
+   - `podId` is generated and printed (format: `YYYY-MM-DD:<surfaceTag>:<featureSlug>`)
 2. Track progress:
-   - `ao pod status <podId> --board`
-   - `ao pod status <podId> --updates --tail 50`
-   - `ao pod status <podId> --evidence`
-3. Change requirements: edit `.codex/pods/<podId>/CONTRACT.md`, then `ao pod sync <podId>`.
+   - `ao pod status <projectId> <podId> --board`
+   - `ao pod status <projectId> <podId> --updates --tail 50`
+   - `ao pod status <projectId> <podId> --evidence`
+3. Change requirements: edit `.codex/pods/<podId>/CONTRACT.md`, then `ao pod sync <projectId> <podId>`.
 4. Gate check (ship/no-ship): `ao pod verify <podId> --project <projectId>`
 
 ### Merge-to-main (merge captain workflow)

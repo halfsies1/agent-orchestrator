@@ -12,6 +12,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { exec } from "../lib/shell.js";
 import { getSessionManager } from "../lib/create-session-manager.js";
+import { loadPodTemplate, materializePodGates, materializePodRoles } from "../lib/pod-templates.js";
+import type { PodTemplateGate } from "../lib/pod-templates.js";
 
 function slugify(input: string): string {
   const s = (input ?? "").trim().toLowerCase();
@@ -295,71 +297,25 @@ function helixBoardTemplate(args: {
   return JSON.stringify(doc, null, 2) + "\n";
 }
 
-function helixEvidenceTemplate(args: { podId: string; featureName: string; surfaceTag: string }): string {
+function podEvidenceTemplate(args: {
+  podId: string;
+  featureName: string;
+  surfaceTag: string;
+  gates: PodTemplateGate[];
+}): string {
   const gates: Array<{
     gateId: string;
     title: string;
     ownerRole: string;
     status: EvidenceGateStatus;
     evidence: Array<{ ts: string; byRole: string; kind: string; ref: string; notes?: string }>;
-  }> = [
-    {
-      gateId: "ux_founder_approval",
-      title: "Founder UX approval (screenshots + parity evidence attached)",
-      ownerRole: "coordinator",
-      status: "todo",
-      evidence: [],
-    },
-    {
-      gateId: "playwright_e2e_headless",
-      title: "Playwright E2E headless (touched flows)",
-      ownerRole: "qa",
-      status: "todo",
-      evidence: [],
-    },
-    {
-      gateId: "playwright_e2e_headed",
-      title: "Playwright E2E headed + evidence (screenshots/video)",
-      ownerRole: "qa",
-      status: "todo",
-      evidence: [],
-    },
-    {
-      gateId: "security_pii_exports",
-      title: "Security: exports enforce authz + no PII leaks when people:pii:read=false",
-      ownerRole: "security",
-      status: "todo",
-      evidence: [],
-    },
-    {
-      gateId: "readiness_dq_reconcile",
-      title: "Readiness & Data Quality reconcile (no contradictory gates/states)",
-      ownerRole: "worker_data",
-      status: "todo",
-      evidence: [],
-    },
-    {
-      gateId: "deterministic_numbers",
-      title: "Decision-grade numbers reconcile OR show explicit Unknown + reason (no silent nulls)",
-      ownerRole: "worker_data",
-      status: "todo",
-      evidence: [],
-    },
-    {
-      gateId: "exec_safe_errors",
-      title: "Exec-safe errors (no raw JSON/stack traces; remediation CTAs)",
-      ownerRole: "worker_web",
-      status: "todo",
-      evidence: [],
-    },
-    {
-      gateId: "tests_and_verification",
-      title: "Required unit/integration tests + verification runs + artifacts captured",
-      ownerRole: "verifier",
-      status: "todo",
-      evidence: [],
-    },
-  ];
+  }> = args.gates.map((g) => ({
+    gateId: g.gateId,
+    title: g.title,
+    ownerRole: g.ownerRole,
+    status: "todo",
+    evidence: [],
+  }));
 
   const doc = {
     version: 1,
@@ -662,6 +618,11 @@ export function registerPod(program: Command): void {
     .argument("<project>", "Project ID from config")
     .argument("<feature>", "Feature name (quote it if it contains spaces)")
     .requiredOption("--surface <tag>", "Helix surface tag (used for naming and handoff conventions)")
+    .option(
+      "--template <nameOrPath>",
+      "Pod template (built-in: helix|minimal, or a yaml/json file path relative to the project repo). Default: helix",
+      "helix",
+    )
     .option("--ui", "Include a UI concept workstream (recommended for any UI changes)")
     .option("--ui-concept <id>", "UI concept id (defaults to <surface>-<feature>-v1 when --ui is set)")
     .option(
@@ -675,6 +636,7 @@ export function registerPod(program: Command): void {
         featureName: string,
         opts: {
           surface: string;
+          template?: string;
           ui?: boolean;
           uiConcept?: string;
           uiArea?: string;
@@ -696,6 +658,18 @@ export function registerPod(program: Command): void {
         const uiArea = parseUiArea(opts.uiArea);
         const uiConceptId =
           opts.ui === true ? (opts.uiConcept?.trim() ? opts.uiConcept.trim() : defaultUiConceptId(surfaceTag, featureName)) : null;
+
+        const template = loadPodTemplate(opts.template, project.path);
+        const roles = materializePodRoles(template, { uiEnabled: opts.ui === true });
+        const gates = materializePodGates(template, { uiEnabled: opts.ui === true });
+        if (roles.length === 0) {
+          console.error(chalk.red(`Template "${template.name}" produced zero roles (refusing to start an empty pod).`));
+          process.exit(1);
+        }
+        if (gates.length === 0) {
+          console.error(chalk.red(`Template "${template.name}" produced zero evidence gates (verification would be impossible).`));
+          process.exit(1);
+        }
 
         const spinner = ora("Spawning feature pod").start();
         const sm = await getSessionManager(config);
@@ -806,69 +780,7 @@ export function registerPod(program: Command): void {
           }
         }
 
-        // 2) Worker sessions
-        const roles: Array<{
-          role: string;
-          roleName: string;
-          branchSuffix: string;
-          ownership: string;
-          agent?: string;
-        }> = [
-          {
-            role: "decision_guardian",
-            roleName: "Decision Guardian (MBB partner)",
-            branchSuffix: "decision",
-            ownership: "decision package, acceptance criteria, exec narrative, and governance language",
-          },
-          ...(opts.ui === true
-            ? [
-                {
-                  role: "ui_concept",
-                  roleName: "UI Concepts Lead",
-                  branchSuffix: "concept",
-                  ownership:
-                    "golden UI concept + viewer registration + screenshot-gated handoff (docs/ui-concepts + ui-golden + registry)",
-                  agent: "claude-code",
-                },
-              ]
-            : []),
-          {
-            role: "worker_web",
-            roleName: "Frontend Lead",
-            branchSuffix: "web",
-            ownership: "`apps/web`, `packages/ui`, and related web tests",
-          },
-          {
-            role: "worker_api",
-            roleName: "Backend Lead",
-            branchSuffix: "api",
-            ownership: "`apps/api`, GraphQL/API contracts, and related API tests",
-          },
-          {
-            role: "worker_data",
-            roleName: "Data/Math Lead",
-            branchSuffix: "data",
-            ownership: "data quality/readiness invariants, economics reconciliation, and related tests",
-          },
-          {
-            role: "security",
-            roleName: "Security Lead",
-            branchSuffix: "security",
-            ownership: "authz, PII controls, export safety, and secure defaults (no leaks)",
-          },
-          {
-            role: "qa",
-            roleName: "QA Automation Lead",
-            branchSuffix: "qa",
-            ownership: "Playwright E2E + UAT scripts, regression coverage for known defect classes",
-          },
-          {
-            role: "verifier",
-            roleName: "Verifier",
-            branchSuffix: "verify",
-            ownership: "run required test commands, capture evidence, and block until gates are green",
-          },
-        ];
+        // 2) Worker sessions (from template)
 
         // Seed pod comms artifacts in the coordinator workspace (best effort).
         if (coordinator.workspacePath) {
@@ -903,7 +815,7 @@ export function registerPod(program: Command): void {
             }),
           );
 
-          writeIfMissing(join(evidenceDir, "EVIDENCE.json"), helixEvidenceTemplate({ podId, featureName, surfaceTag }));
+          writeIfMissing(join(evidenceDir, "EVIDENCE.json"), podEvidenceTemplate({ podId, featureName, surfaceTag, gates }));
           writeIfMissing(join(podDir, "STATUS.md"), helixStatusTemplate({ podId, featureName, surfaceTag }));
           writeIfMissing(
             join(podDir, "PROTOCOL.md"),
@@ -1093,6 +1005,7 @@ export function registerPod(program: Command): void {
         console.log(`  Pod:        ${chalk.cyan(podId)}`);
         console.log(`  Project:    ${chalk.cyan(projectId)} (${project.repo})`);
         console.log(`  Surface:    ${chalk.cyan(surfaceTag)}`);
+        console.log(`  Template:   ${chalk.cyan(template.name)}`);
         console.log(`  Integrate:  ${chalk.cyan(integrationBranch)}`);
         console.log(`  Coord:      ${chalk.green(coordinator.id)}  ${chalk.dim(coordinator.workspacePath ?? "-")}`);
         if (integrationPrUrl) {
